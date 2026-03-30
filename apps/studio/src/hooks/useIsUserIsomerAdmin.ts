@@ -18,6 +18,9 @@ export const useIsUserIsomerAdmin = ({ roles }: UseIsUserIsomerAdminProps) => {
     { core: [], migrators: [] },
   )
 
+  // All authenticated users are treated as admins in local development
+  if (process.env.NODE_ENV === "development") return true
+
   if (roles.includes(ADMIN_ROLE.CORE) && core.includes(email)) {
     return true
   }

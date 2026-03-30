@@ -149,7 +149,9 @@ export const emailSessionRouter = router({
 
       await ctx.gb.setAttributes(newAttributes)
 
-      const isSingpassEnabled = getIsSingpassEnabled({ gb: ctx.gb })
+      // No Singpass OIDC server runs locally — skip Singpass step in dev
+      const isSingpassEnabled =
+        env.NODE_ENV !== "development" && getIsSingpassEnabled({ gb: ctx.gb })
 
       if (!isSingpassEnabled) {
         const user = await db.transaction().execute(async (tx) => {

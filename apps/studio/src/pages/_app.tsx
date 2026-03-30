@@ -18,6 +18,7 @@ import Suspense from "~/components/Suspense"
 import { VersionWrapper } from "~/components/VersionWrapper"
 import { env } from "~/env.mjs"
 import { LoginStateProvider } from "~/features/auth"
+import { IS_SINGPASS_ENABLED_FEATURE_KEY } from "~/lib/growthbook"
 import { type NextPageWithLayout } from "~/lib/types"
 import { DefaultLayout } from "~/templates/layouts/DefaultLayout"
 import { theme } from "~/theme"
@@ -57,7 +58,12 @@ datadogRum.init({
 const gb = new GrowthBook({
   apiHost: "https://cdn.growthbook.io",
   clientKey: env.NEXT_PUBLIC_GROWTHBOOK_CLIENT_KEY,
-  enabled: true,
+  // Disable GrowthBook entirely if no real client key is provided (e.g. local dev)
+  enabled: !!env.NEXT_PUBLIC_GROWTHBOOK_CLIENT_KEY,
+  // Disable Singpass locally — Singpass keys are not available in dev
+  ...(process.env.NODE_ENV === "development" && {
+    forcedFeatureValues: new Map([[IS_SINGPASS_ENABLED_FEATURE_KEY, false]]),
+  }),
 })
 
 void gb.init({

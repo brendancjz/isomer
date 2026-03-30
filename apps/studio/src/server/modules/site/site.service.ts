@@ -390,13 +390,28 @@ export const createSite = async ({ siteName, userId }: CreateSiteProps) => {
     return siteId
   })
 
-  await addUsersToSite({
-    siteId,
-    users: [...ISOMER_ADMINS, ...ISOMER_MIGRATORS].map((email) => ({
+  const creator = await db
+    .selectFrom("User")
+    .select(["email"])
+    .where("id", "=", userId)
+    .executeTakeFirst()
+
+  const isomerTeamUsers = [...ISOMER_ADMINS, ...ISOMER_MIGRATORS].map(
+    (email) => ({
       email: `${email}@open.gov.sg`,
       role: RoleType.Admin,
-    })),
-  })
+    }),
+  )
+
+  // Always include the creator so they have access even if not on the Isomer team
+  // (e.g. in local development where the admin check is bypassed)
+  const usersToAdd =
+    creator &&
+    !isomerTeamUsers.some(({ email }) => email === creator.email)
+      ? [...isomerTeamUsers, { email: creator.email, role: RoleType.Admin }]
+      : isomerTeamUsers
+
+  await addUsersToSite({ siteId, users: usersToAdd })
 
   return { siteId, siteName }
 }

@@ -5,6 +5,8 @@ import { AuditLogEvent, RoleType } from "~prisma/generated/generatedEnums"
 import get from "lodash/get"
 import partition from "lodash/partition"
 
+import { env } from "~/env.mjs"
+
 import type {
   BulkPermissionsProps,
   CrudResourceActions,
@@ -296,6 +298,9 @@ export const validateUserIsIsomerCoreAdmin = async ({
   gb,
   roles,
 }: ValidateUserIsIsomerAdminProps) => {
+  // All authenticated users are treated as admins in local development
+  if (env.NODE_ENV === "development") return
+
   const user = await db
     .selectFrom("User")
     .where("id", "=", userId)

@@ -9,20 +9,31 @@ import {
 } from "./singpass.constants"
 import { extractUuid } from "./singpass.utils"
 
-const singpassIssuer = await Issuer.discover(env.SINGPASS_ISSUER_ENDPOINT)
-const singpassClient = new singpassIssuer.Client(
-  {
-    client_id: env.SINGPASS_CLIENT_ID,
-    response_types: ["code"],
-    token_endpoint_auth_method: "private_key_jwt",
-    id_token_signed_response_alg: "ES256",
-  },
-  {
-    keys: [SINGPASS_SIGNING_JWK, SINGPASS_ENCRYPTION_JWK],
-  },
-)
+// Lazily initialised so that the module can be imported without a running
+// Singpass OIDC server (e.g. in local development with Singpass disabled).
+let _singpassClient: InstanceType<(typeof Issuer)["prototype"]["Client"]> | null =
+  null
 
-export const getAuthorizationUrl = () => {
+const getSingpassClient = async () => {
+  if (!_singpassClient) {
+    const singpassIssuer = await Issuer.discover(env.SINGPASS_ISSUER_ENDPOINT)
+    _singpassClient = new singpassIssuer.Client(
+      {
+        client_id: env.SINGPASS_CLIENT_ID,
+        response_types: ["code"],
+        token_endpoint_auth_method: "private_key_jwt",
+        id_token_signed_response_alg: "ES256",
+      },
+      {
+        keys: [SINGPASS_SIGNING_JWK, SINGPASS_ENCRYPTION_JWK],
+      },
+    )
+  }
+  return _singpassClient
+}
+
+export const getAuthorizationUrl = async () => {
+  const singpassClient = await getSingpassClient()
   const codeVerifier = generators.codeVerifier()
   const codeChallenge = generators.codeChallenge(codeVerifier)
   const nonce = generators.nonce()
@@ -58,6 +69,7 @@ export const login = async ({
   state,
 }: LoginParams) => {
   try {
+    const singpassClient = await getSingpassClient()
     const stringifiedState = JSON.stringify(state)
     const tokens = await singpassClient.callback(
       SINGPASS_REDIRECT_URI,
