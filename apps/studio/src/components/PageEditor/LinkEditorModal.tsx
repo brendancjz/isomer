@@ -19,7 +19,6 @@ import {
 } from "@opengovsg/design-system-react"
 import { getResourceIdFromReferenceLink } from "@opengovsg/isomer-components"
 import { isEmpty } from "lodash"
-import { useCallback } from "react"
 import { z } from "zod"
 import {
   FILE_UPLOAD_ACCEPTED_MIME_TYPE_MAPPING,
@@ -36,12 +35,9 @@ import {
   pageOrLinkSchema,
   siteSchema,
 } from "~/features/editing-experience/schema"
+import { useLinkEditorFileMetaSuffix } from "~/hooks/useLinkEditorFileMetaSuffix"
 import { useQueryParse } from "~/hooks/useQueryParse"
 import { useZodForm } from "~/lib/form"
-import {
-  buildFileDownloadLinkMetaSuffix,
-  stripFileDownloadLinkMetaSuffix,
-} from "~/utils/fileDownloadLinkLabel"
 import { getReferenceLink } from "~/utils/link"
 
 import { AttachmentData } from "../AttachmentData"
@@ -85,10 +81,15 @@ const LinkEditorModalContent = ({
   onSave,
   linkTypes,
 }: LinkEditorModalContentProps) => {
+  const { strippedLinkTextForForm, onUploadedFile, buildFinalLinkTextForSave } =
+    useLinkEditorFileMetaSuffix({
+      initialLinkText: linkText,
+      showLinkText,
+    })
+
   const {
     handleSubmit,
     setValue,
-    getValues,
     register,
     formState: { errors },
   } = useZodForm({
@@ -100,32 +101,23 @@ const LinkEditorModalContent = ({
       linkHref: z.string().min(1).optional(),
     }),
     defaultValues: {
-      linkText,
+      linkText: strippedLinkTextForForm,
       linkHref,
     },
     reValidateMode: "onChange",
   })
 
-  const handleUploadedFileForLink = useCallback(
-    (file: File) => {
-      if (!showLinkText) return
-      const suffix = buildFileDownloadLinkMetaSuffix(file)
-      if (!suffix) return
-      const base = stripFileDownloadLinkMetaSuffix(getValues("linkText"))
-      setValue("linkText", base + suffix, {
-        shouldValidate: true,
-        shouldDirty: true,
-      })
-    },
-    [getValues, setValue, showLinkText],
-  )
-
   const isEditingLink = !!linkText && !!linkHref
 
   const onSubmit = handleSubmit(
-    // TODO: Refactor to not have to check for !!linkHref
+    // TODO: Refactor to not have to check for !linkHref
     // Context: quick hack to ensure error message don't shown for empty linkHref for FileAttachment
-    ({ linkText, linkHref }) => !!linkHref && onSave(linkText, linkHref),
+    ({ linkText, linkHref }) => {
+      if (!linkHref) return
+
+      const finalLinkText = buildFinalLinkTextForSave(linkText, linkHref)
+      onSave(finalLinkText, linkHref)
+    },
   )
 
   return (
@@ -170,11 +162,7 @@ const LinkEditorModalContent = ({
               }
               error={errors.linkHref?.message}
             >
-              <ModalLinkEditor
-                onUploadedFile={
-                  showLinkText ? handleUploadedFileForLink : undefined
-                }
-              />
+              <ModalLinkEditor onUploadedFile={onUploadedFile} />
               {errors.linkHref?.message && (
                 <FormErrorMessage>{errors.linkHref.message}</FormErrorMessage>
               )}

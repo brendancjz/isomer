@@ -7,8 +7,7 @@ import {
 } from "../fileDownloadLinkLabel"
 
 /** Minimal stand-in for browser `File` (implementation only uses `name` and `size`). */
-const mockFile = (name: string, size: number): File =>
-  ({ name, size }) as File
+const mockFile = (name: string, size: number): File => ({ name, size }) as File
 
 describe("fileDownloadLinkLabel", () => {
   describe("getDisplayLabelForDownloadFileName", () => {
@@ -25,15 +24,15 @@ describe("fileDownloadLinkLabel", () => {
 
   describe("buildFileDownloadLinkMetaSuffix", () => {
     it("includes type and size for a PDF", () => {
-      expect(buildFileDownloadLinkMetaSuffix(mockFile("speech.pdf", 286720))).toBe(
-        " [PDF, 280.00 KB]",
-      )
+      expect(
+        buildFileDownloadLinkMetaSuffix(mockFile("speech.pdf", 286720)),
+      ).toBe(" [PDF, 280.00 KB]")
     })
 
     it("includes only size when extension is unknown", () => {
-      expect(buildFileDownloadLinkMetaSuffix(mockFile("unknown.bin", 100))).toBe(
-        " [100.00 B]",
-      )
+      expect(
+        buildFileDownloadLinkMetaSuffix(mockFile("unknown.bin", 100)),
+      ).toBe(" [100.00 B]")
     })
   })
 
@@ -45,9 +44,9 @@ describe("fileDownloadLinkLabel", () => {
     })
 
     it("removes XLSX before shorter XLS would incorrectly match", () => {
-      expect(
-        stripFileDownloadLinkMetaSuffix("File [XLSX, 1.00 MB]"),
-      ).toBe("File")
+      expect(stripFileDownloadLinkMetaSuffix("File [XLSX, 1.00 MB]")).toBe(
+        "File",
+      )
     })
 
     it("does not strip unrelated trailing brackets", () => {
