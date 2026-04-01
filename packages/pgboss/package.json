@@ -27,7 +27,7 @@
     "lint": "oxlint --type-aware .",
     "lint:fix": "oxlint --type-aware --fix .",
     "prebuild": "rimraf dist",
-    "services:setup": "docker compose -f \"docker-compose.yml\" up -d --wait",
+    "services:setup": "docker-compose -f \"docker-compose.yml\" up -d --wait",
     "setup:test": "run-s --print-label services:setup db:sleep",
     "test": "run-s test:*",
     "test:watch": "dotenv -e .env.test npx vitest watch"

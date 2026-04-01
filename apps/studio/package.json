@@ -35,7 +35,7 @@
     "migrate:uat": "source .ssh/.env.uat && npx prisma migrate deploy",
     "predev": "run-s migrate",
     "prestart": "npm run migrate",
-    "services:setup": "docker compose -f \"docker-compose.yml\" up -d --wait",
+    "services:setup": "docker-compose -f \"docker-compose.yml\" up -d --wait",
     "setup": "run-s --print-label services:setup db:sleep migrate:dev db:seed",
     "setup:test": "run-s --print-label services:setup db:sleep migrate generate",
     "start": "next start",

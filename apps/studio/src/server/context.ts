@@ -53,9 +53,12 @@ export const createContext = async (opts: CreateNextContextOptions) => {
 }
 
 export const createGrowthBookContext = async () => {
+  const clientKey = env.GROWTHBOOK_CLIENT_KEY?.trim() ?? ""
+  const hasClientKey = clientKey.length > 0
+
   const growthbookContext = new GrowthBook({
     apiHost: "https://cdn.growthbook.io",
-    clientKey: env.GROWTHBOOK_CLIENT_KEY,
+    ...(hasClientKey ? { clientKey } : {}),
     debug: false, // NOTE: do not put true unless local dev
     disableCache: true,
     // Disable Singpass locally so the email OTP flow completes without needing
@@ -66,7 +69,15 @@ export const createGrowthBookContext = async () => {
       },
     }),
   })
-  await growthbookContext.init({ timeout: 2000 })
+
+  // init() without a payload calls _refresh(), which throws if clientKey is missing.
+  // Mirror client _app.tsx: allow local dev when GROWTHBOOK_CLIENT_KEY is unset.
+  if (hasClientKey) {
+    await growthbookContext.init({ timeout: 2000 })
+  } else {
+    await growthbookContext.init({ payload: { features: {} } })
+  }
+
   return growthbookContext
 }
 
