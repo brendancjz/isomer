@@ -6,6 +6,10 @@ import {
   stripFileDownloadLinkMetaSuffix,
 } from "../fileDownloadLinkLabel"
 
+/** Minimal stand-in for browser `File` (implementation only uses `name` and `size`). */
+const mockFile = (name: string, size: number): File =>
+  ({ name, size }) as File
+
 describe("fileDownloadLinkLabel", () => {
   describe("getDisplayLabelForDownloadFileName", () => {
     it("maps allowed extensions to display labels", () => {
@@ -21,17 +25,15 @@ describe("fileDownloadLinkLabel", () => {
 
   describe("buildFileDownloadLinkMetaSuffix", () => {
     it("includes type and size for a PDF", () => {
-      const file = new File([new Uint8Array(286720)], "speech.pdf", {
-        type: "application/pdf",
-      })
-      expect(buildFileDownloadLinkMetaSuffix(file)).toBe(" [PDF, 280.00 KB]")
+      expect(buildFileDownloadLinkMetaSuffix(mockFile("speech.pdf", 286720))).toBe(
+        " [PDF, 280.00 KB]",
+      )
     })
 
     it("includes only size when extension is unknown", () => {
-      const file = new File([new Uint8Array(100)], "unknown.bin", {
-        type: "application/octet-stream",
-      })
-      expect(buildFileDownloadLinkMetaSuffix(file)).toBe(" [100.00 B]")
+      expect(buildFileDownloadLinkMetaSuffix(mockFile("unknown.bin", 100))).toBe(
+        " [100.00 B]",
+      )
     })
   })
 
