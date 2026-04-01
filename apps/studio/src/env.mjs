@@ -63,6 +63,11 @@ const server = z
     DATABASE_URL: z.string().url(),
     CI: z.coerce.boolean().default(false),
     NODE_ENV: z.enum(["development", "test", "production"]),
+    /** Dev only: skip real S3 presign + accept uploads at /api/dev/mock-s3-upload */
+    ISOMER_DEV_MOCK_S3_UPLOADS: z
+      .string()
+      .optional()
+      .transform((value) => value === "true"),
     OTP_EXPIRY: z.coerce.number().positive().optional().default(600),
     POSTMAN_API_KEY: z.string().optional(),
     SESSION_SECRET: z.string().min(32),
@@ -86,6 +91,7 @@ const processEnv = {
   DATABASE_URL: process.env.DATABASE_URL,
   CI: process.env.CI,
   NODE_ENV: process.env.NODE_ENV,
+  ISOMER_DEV_MOCK_S3_UPLOADS: process.env.ISOMER_DEV_MOCK_S3_UPLOADS,
   OTP_EXPIRY: process.env.OTP_EXPIRY,
   POSTMAN_API_KEY: process.env.POSTMAN_API_KEY,
   SESSION_SECRET: process.env.SESSION_SECRET,

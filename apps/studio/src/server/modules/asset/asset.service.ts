@@ -16,6 +16,9 @@ import { bulkValidateUserPermissionsForResources } from "../permissions/permissi
 
 const { NEXT_PUBLIC_S3_ASSETS_BUCKET_NAME } = env
 
+export const isDevMockS3UploadsEnabled = (): boolean =>
+  env.NODE_ENV === "development" && env.ISOMER_DEV_MOCK_S3_UPLOADS
+
 // Server-side allowlist: extension (lowercase, e.g. ".jpg") -> MIME (used for signed upload metadata)
 const EXTENSION_TO_MIME: Record<string, string> = {
   ...IMAGE_UPLOAD_ACCEPTED_MIME_TYPE_MAPPING,
@@ -117,6 +120,18 @@ export const getPresignedPutUrl = async ({
 }> => {
   const contentType = getContentTypeFromKey(key)
   const contentDisposition = getContentDispositionForKey(key)
+
+  if (isDevMockS3UploadsEnabled()) {
+    const base = (
+      env.NEXT_PUBLIC_APP_URL ?? "http://127.0.0.1:3000"
+    ).replace(/\/$/, "")
+    return {
+      presignedPutUrl: `${base}/api/dev/mock-s3-upload`,
+      contentType,
+      contentDisposition,
+    }
+  }
+
   const presignedPutUrl = await generateSignedPutUrl({
     Bucket: NEXT_PUBLIC_S3_ASSETS_BUCKET_NAME,
     Key: key,

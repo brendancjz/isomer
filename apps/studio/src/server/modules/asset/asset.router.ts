@@ -6,6 +6,7 @@ import {
   doAllFileKeysBelongToSite,
   getFileKey,
   getPresignedPutUrl,
+  isDevMockS3UploadsEnabled,
   markFileAsDeleted,
   validateUserPermissionsForAsset,
 } from "./asset.service"
@@ -28,14 +29,18 @@ export const assetRouter = router({
           key: fileKey,
         })
 
+      const devMockS3 = isDevMockS3UploadsEnabled()
       ctx.logger.info(
         {
           userId: ctx.session?.userId,
           siteId,
           fileName,
           fileKey,
+          devMockS3,
         },
-        `Generated presigned PUT URL for ${fileKey} for site ${siteId}`,
+        devMockS3
+          ? `Dev mock S3 upload URL for ${fileKey} (site ${siteId})`
+          : `Generated presigned PUT URL for ${fileKey} for site ${siteId}`,
       )
 
       return {
