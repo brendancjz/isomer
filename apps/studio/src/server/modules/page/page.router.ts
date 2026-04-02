@@ -2,6 +2,7 @@ import type {
   CollectionPagePageProps,
   IsomerSchema,
 } from "@opengovsg/isomer-components"
+import type { UnwrapTagged } from "type-fest"
 import {
   COLLECTION_PAGE_DEFAULT_SORT_BY,
   COLLECTION_PAGE_DEFAULT_SORT_DIRECTION,
@@ -21,10 +22,12 @@ import {
   ENABLE_CODEBUILD_JOBS,
   IS_SINGPASS_ENABLED_FEATURE_KEY,
 } from "~/lib/growthbook"
+import { copyObjectInBucket } from "~/lib/s3"
 import {
   basePageSchema,
   createIndexPageSchema,
   createPageSchema,
+  duplicatePageSchema,
   getRootPageSchema,
   listPagesSchema,
   pageSettingsSchema,
@@ -35,6 +38,7 @@ import {
   updatePageMetaSchema,
 } from "~/schemas/page"
 import { scheduledPublishServerSchema } from "~/schemas/schedule"
+import { env } from "~/env.mjs"
 import { protectedProcedure, router } from "~/server/trpc"
 import { ajv } from "~/utils/ajv"
 import { safeJsonParse } from "~/utils/safeJsonParse"
@@ -62,8 +66,16 @@ import {
   updateBlobById,
   updatePageById,
 } from "../resource/resource.service"
+import { doAllFileKeysBelongToSite } from "../asset/asset.service"
 import { getSiteConfig } from "../site/site.service"
 import { createDefaultPage, createFolderIndexPage } from "./page.service"
+import {
+  applyDuplicateTitleToBlobContent,
+  buildAssetKeyReplacementMap,
+  collectAssetFileKeysFromJson,
+  pickUniqueDuplicatePermalink,
+  rewriteAssetPathsInJson,
+} from "./pageDuplicate.service"
 
 const schemaValidator = ajv.compile<IsomerSchema>(schema)
 
@@ -618,6 +630,155 @@ export const pageRouter = router({
         return { pageId: resource.id }
       },
     ),
+
+  duplicatePage: protectedProcedure
+    .input(duplicatePageSchema)
+    .mutation(async ({ ctx, input: { siteId, pageId } }) => {
+      await bulkValidateUserPermissionsForResources({
+        siteId,
+        action: "read",
+        userId: ctx.user.id,
+        resourceIds: [String(pageId)],
+      })
+
+      const source = await getFullPageById(db, {
+        resourceId: pageId,
+        siteId,
+      })
+      if (!source) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Resource not found",
+        })
+      }
+      if (source.type !== ResourceType.Page) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only standard pages can be duplicated",
+        })
+      }
+
+      await bulkValidateUserPermissionsForResources({
+        siteId,
+        action: "create",
+        userId: ctx.user.id,
+        resourceIds: [source.parentId],
+      })
+
+      const newTitle = `Copy of ${source.title}`
+      const content = _.cloneDeep(source.content) as UnwrapTagged<
+        PrismaJson.BlobJsonContent
+      >
+
+      const keysSet = collectAssetFileKeysFromJson(content)
+      const keys = [...keysSet]
+      if (
+        keys.length > 0 &&
+        !doAllFileKeysBelongToSite({ fileKeys: keys, siteId })
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Page content references assets that do not belong to this site",
+        })
+      }
+
+      const keyMap = buildAssetKeyReplacementMap(keysSet, siteId)
+      const bucket = env.NEXT_PUBLIC_S3_ASSETS_BUCKET_NAME
+
+      try {
+        await Promise.all(
+          [...keyMap.entries()].map(([oldKey, newKey]) =>
+            copyObjectInBucket({
+              Bucket: bucket,
+              sourceKey: oldKey,
+              destinationKey: newKey,
+            }),
+          ),
+        )
+      } catch (cause) {
+        ctx.logger.error({ cause }, "Failed to copy page assets for duplicate")
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "Could not copy file assets for the duplicated page. If you use dev mock S3 uploads, ensure real S3 objects exist or disable mock mode.",
+          cause,
+        })
+      }
+
+      const duplicated = rewriteAssetPathsInJson(
+        content,
+        keyMap,
+      ) as UnwrapTagged<PrismaJson.BlobJsonContent>
+      applyDuplicateTitleToBlobContent(duplicated, newTitle)
+
+      if (!schemaValidator(duplicated)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Duplicated page content failed schema validation",
+          cause: schemaValidator.errors,
+        })
+      }
+
+      const by = await db
+        .selectFrom("User")
+        .where("id", "=", ctx.user.id)
+        .selectAll()
+        .executeTakeFirstOrThrow(
+          () =>
+            new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Please ensure that you are authenticated",
+            }),
+        )
+
+      const resource = await db.transaction().execute(async (tx) => {
+        const permalink = await pickUniqueDuplicatePermalink(tx, {
+          siteId,
+          parentId: source.parentId,
+          sourceTitle: source.title,
+        })
+
+        const blob = await tx
+          .insertInto("Blob")
+          .values({ content: jsonb(duplicated) })
+          .returningAll()
+          .executeTakeFirstOrThrow()
+
+        const addedResource = await tx
+          .insertInto("Resource")
+          .values({
+            title: newTitle,
+            permalink,
+            siteId,
+            parentId: source.parentId ?? undefined,
+            draftBlobId: blob.id,
+            type: ResourceType.Page,
+          })
+          .returningAll()
+          .executeTakeFirstOrThrow()
+          .catch((err) => {
+            if (get(err, "code") === PG_ERROR_CODES.uniqueViolation) {
+              throw new TRPCError({
+                code: "CONFLICT",
+                message: "A resource with the same permalink already exists",
+              })
+            }
+            throw err
+          })
+
+        await logResourceEvent(tx, {
+          siteId,
+          by,
+          delta: { before: null, after: { blob, resource: addedResource } },
+          eventType: AuditLogEvent.ResourceCreate,
+        })
+
+        return addedResource
+      })
+
+      return { pageId: resource.id }
+    }),
 
   getRootPage: protectedProcedure
     .input(getRootPageSchema)

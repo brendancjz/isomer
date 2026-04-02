@@ -1,8 +1,10 @@
 import type {
+  CopyObjectCommandInput,
   PutObjectCommandInput,
   PutObjectTaggingCommandInput,
 } from "@aws-sdk/client-s3"
 import {
+  CopyObjectCommand,
   GetObjectTaggingCommand,
   PutObjectCommand,
   PutObjectTaggingCommand,
@@ -39,6 +41,32 @@ export const generateSignedPutUrl = async ({
       // Sign these headers so S3 rejects PUTs with different values (prevents type-confusion XSS)
       signableHeaders: new Set(["content-type", "content-disposition"]),
     },
+  )
+}
+
+/**
+ * Server-side copy within the same bucket (e.g. duplicating page assets).
+ * CopySource must be URL-encoded per S3 API; path segments are encoded separately.
+ */
+export const copyObjectInBucket = async ({
+  Bucket,
+  sourceKey,
+  destinationKey,
+}: Pick<CopyObjectCommandInput, "Bucket"> & {
+  sourceKey: string
+  destinationKey: string
+}) => {
+  const copySource = `${Bucket}/${sourceKey
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/")}`
+
+  return storage.send(
+    new CopyObjectCommand({
+      Bucket,
+      Key: destinationKey,
+      CopySource: copySource,
+    }),
   )
 }
 

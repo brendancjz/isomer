@@ -22,7 +22,9 @@ import {
   setupSite,
   setupUser,
 } from "tests/integration/helpers/seed"
+import { copyObjectInBucket } from "~/lib/s3"
 import { createCallerFactory } from "~/server/trpc"
+import { vi } from "vitest"
 import {
   AuditLogEvent,
   ResourceState,
@@ -31,10 +33,14 @@ import {
 
 import type { User } from "../../database"
 import { assertAuditLogRows } from "../../audit/__tests__/utils"
-import { db } from "../../database"
+import { db, jsonb } from "../../database"
 import { getBlobOfResource, getPageById } from "../../resource/resource.service"
 import { pageRouter } from "../page.router"
 import { createDefaultPage } from "../page.service"
+
+vi.mock("~/lib/s3", () => ({
+  copyObjectInBucket: vi.fn().mockResolvedValue({ $metadata: {} }),
+}))
 
 const createCaller = createCallerFactory(pageRouter)
 
@@ -1296,6 +1302,284 @@ describe("page.router", async () => {
     // TODO: Implement tests when permissions are implemented
     it.skip("should throw 403 if user does not have write access to folder", async () => {})
     it.skip("should throw 403 if user does not have write access to root", async () => {})
+  })
+
+  describe("duplicatePage", () => {
+    beforeEach(() => {
+      vi.mocked(copyObjectInBucket).mockClear()
+      vi.mocked(copyObjectInBucket).mockResolvedValue({ $metadata: {} })
+    })
+
+    it("should throw 401 if not logged in", async () => {
+      const unauthedSession = applySession()
+      const unauthedCaller = createCaller(createMockRequest(unauthedSession))
+
+      const result = unauthedCaller.duplicatePage({ siteId: 1, pageId: 1 })
+
+      await expect(result).rejects.toThrowError(
+        new TRPCError({ code: "UNAUTHORIZED" }),
+      )
+    })
+
+    it("should throw 403 if user does not have read access", async () => {
+      const { site, page } = await setupPageResource({
+        resourceType: ResourceType.Page,
+      })
+
+      const result = caller.duplicatePage({
+        siteId: site.id,
+        pageId: Number(page.id),
+      })
+
+      await expect(result).rejects.toThrowError(
+        new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "You do not have sufficient permissions to perform this action",
+        }),
+      )
+    })
+
+    it("should throw 404 if page does not exist", async () => {
+      const { site } = await setupSite()
+      await setupAdminPermissions({
+        userId: session.userId ?? undefined,
+        siteId: site.id,
+      })
+
+      const result = caller.duplicatePage({
+        siteId: site.id,
+        pageId: 99_999_999,
+      })
+
+      await expect(result).rejects.toThrowError(
+        new TRPCError({ code: "NOT_FOUND", message: "Resource not found" }),
+      )
+    })
+
+    it("should reject non-Page resources", async () => {
+      const { site, collection } = await setupCollection()
+      const { page: collectionPage } = await setupPageResource({
+        resourceType: ResourceType.CollectionPage,
+        parentId: collection.id,
+        siteId: site.id,
+      })
+      await setupAdminPermissions({
+        userId: session.userId ?? undefined,
+        siteId: site.id,
+      })
+
+      const result = caller.duplicatePage({
+        siteId: site.id,
+        pageId: Number(collectionPage.id),
+      })
+
+      await expect(result).rejects.toThrowError(
+        new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only standard pages can be duplicated",
+        }),
+      )
+    })
+
+    it("should throw if content references assets from another site id", async () => {
+      const { site, page, blob } = await setupPageResource({
+        resourceType: ResourceType.Page,
+      })
+      const baseContent = blob.content as Record<string, unknown>
+      const content = {
+        ...baseContent,
+        content: [
+          ...(baseContent.content as unknown[]),
+          {
+            type: "image",
+            src: "/99999999/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/x.png",
+            alt: "x",
+            size: "default",
+          },
+        ],
+      }
+      await db
+        .updateTable("Blob")
+        .set({
+          content: jsonb(content as unknown as PrismaJson.BlobJsonContent),
+        })
+        .where("id", "=", blob.id)
+        .execute()
+
+      await setupAdminPermissions({
+        userId: session.userId ?? undefined,
+        siteId: site.id,
+      })
+
+      const result = caller.duplicatePage({
+        siteId: site.id,
+        pageId: Number(page.id),
+      })
+
+      await expect(result).rejects.toThrowError(
+        new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Page content references assets that do not belong to this site",
+        }),
+      )
+    })
+
+    it("should duplicate a page, copy assets, and create a draft sibling", async () => {
+      const { site, page, blob } = await setupPageResource({
+        resourceType: ResourceType.Page,
+        title: "Original title",
+      })
+      const assetUuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+      const baseContent = blob.content as Record<string, unknown>
+      const content = {
+        ...baseContent,
+        page: {
+          ...(baseContent.page as object),
+          title: "Original title",
+        },
+        content: [
+          ...(baseContent.content as unknown[]),
+          {
+            type: "image",
+            src: `/${site.id}/${assetUuid}/file.png`,
+            alt: "x",
+            size: "default",
+          },
+        ],
+      }
+      await db
+        .updateTable("Blob")
+        .set({
+          content: jsonb(content as unknown as PrismaJson.BlobJsonContent),
+        })
+        .where("id", "=", blob.id)
+        .execute()
+
+      await setupAdminPermissions({
+        userId: session.userId ?? undefined,
+        siteId: site.id,
+      })
+
+      const { pageId: newPageId } = await caller.duplicatePage({
+        siteId: site.id,
+        pageId: Number(page.id),
+      })
+
+      expect(copyObjectInBucket).toHaveBeenCalledTimes(1)
+      expect(copyObjectInBucket).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceKey: `${site.id}/${assetUuid}/file.png`,
+        }),
+      )
+
+      const dup = await db
+        .selectFrom("Resource")
+        .innerJoin("Blob", "Resource.draftBlobId", "Blob.id")
+        .where("Resource.id", "=", newPageId)
+        .select([
+          "Resource.title",
+          "Resource.permalink",
+          "Resource.parentId",
+          "Resource.publishedVersionId",
+          "Resource.type",
+          "Blob.content",
+        ])
+        .executeTakeFirstOrThrow()
+
+      expect(dup.title).toBe("Copy of Original title")
+      expect(dup.type).toBe(ResourceType.Page)
+      expect(dup.publishedVersionId).toBeNull()
+      expect(dup.parentId).toBe(page.parentId)
+      expect(dup.permalink).toMatch(/^copy-of-original-title/)
+
+      const dupContent = dup.content as {
+        content: Array<{ type: string; src?: string }>
+      }
+      const imageBlock = dupContent.content.find((b) => b.type === "image")
+      expect(imageBlock?.src).toMatch(
+        new RegExp(`^/${site.id}/[0-9a-f-]{36}/file\\.png$`),
+      )
+      expect(imageBlock?.src).not.toBe(`/${site.id}/${assetUuid}/file.png`)
+
+      const pageRecord = dup.content as { page?: { title?: string } }
+      expect(pageRecord.page?.title).toBe("Copy of Original title")
+    })
+
+    it("should pick a unique permalink when base slug is taken", async () => {
+      const { site, page, blob } = await setupPageResource({
+        resourceType: ResourceType.Page,
+        title: "Original title",
+      })
+      await setupAdminPermissions({
+        userId: session.userId ?? undefined,
+        siteId: site.id,
+      })
+
+      await caller.duplicatePage({
+        siteId: site.id,
+        pageId: Number(page.id),
+      })
+
+      const { pageId: secondId } = await caller.duplicatePage({
+        siteId: site.id,
+        pageId: Number(page.id),
+      })
+
+      const second = await db
+        .selectFrom("Resource")
+        .where("id", "=", secondId)
+        .select("permalink")
+        .executeTakeFirstOrThrow()
+
+      expect(second.permalink).toBe("copy-of-original-title-2")
+    })
+
+    it("should fail when S3 copy fails", async () => {
+      const { site, page, blob } = await setupPageResource({
+        resourceType: ResourceType.Page,
+      })
+      const assetUuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+      const baseContent = blob.content as Record<string, unknown>
+      const content = {
+        ...baseContent,
+        content: [
+          ...(baseContent.content as unknown[]),
+          {
+            type: "image",
+            src: `/${site.id}/${assetUuid}/file.png`,
+            alt: "x",
+            size: "default",
+          },
+        ],
+      }
+      await db
+        .updateTable("Blob")
+        .set({
+          content: jsonb(content as unknown as PrismaJson.BlobJsonContent),
+        })
+        .where("id", "=", blob.id)
+        .execute()
+
+      await setupAdminPermissions({
+        userId: session.userId ?? undefined,
+        siteId: site.id,
+      })
+
+      vi.mocked(copyObjectInBucket).mockRejectedValueOnce(new Error("S3 down"))
+
+      const result = caller.duplicatePage({
+        siteId: site.id,
+        pageId: Number(page.id),
+      })
+
+      await expect(result).rejects.toMatchObject({
+        code: "INTERNAL_SERVER_ERROR",
+        message:
+          "Could not copy file assets for the duplicated page. If you use dev mock S3 uploads, ensure real S3 objects exist or disable mock mode.",
+      })
+    })
   })
 
   describe("getRootPage", () => {

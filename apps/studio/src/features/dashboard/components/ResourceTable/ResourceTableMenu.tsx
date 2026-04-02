@@ -1,15 +1,19 @@
 import { MenuButton, MenuList, Portal } from "@chakra-ui/react"
-import { IconButton, Menu } from "@opengovsg/design-system-react"
+import { IconButton, Menu, useToast } from "@opengovsg/design-system-react"
 import { useSetAtom } from "jotai"
+import { useRouter } from "next/router"
 import {
   BiCog,
+  BiCopy,
   BiDotsHorizontalRounded,
   BiFolderOpen,
   BiTrash,
 } from "react-icons/bi"
+import { BRIEF_TOAST_SETTINGS } from "~/constants/toast"
 import { MenuItem } from "~/components/Menu"
 import { moveResourceAtom } from "~/features/editing-experience/atoms"
 import { Can } from "~/features/permissions"
+import { trpc } from "~/utils/trpc"
 import { ResourceType } from "~prisma/generated/generatedEnums"
 
 import type { ResourceTableData } from "./types"
@@ -20,6 +24,7 @@ import {
 } from "../../atoms"
 
 interface ResourceTableMenuProps {
+  siteId: number
   title: ResourceTableData["title"]
   resourceId: ResourceTableData["id"]
   type: ResourceTableData["type"]
@@ -29,6 +34,7 @@ interface ResourceTableMenuProps {
 }
 
 export const ResourceTableMenu = ({
+  siteId,
   resourceId,
   title,
   type,
@@ -36,6 +42,29 @@ export const ResourceTableMenu = ({
   resourceType,
   parentId,
 }: ResourceTableMenuProps) => {
+  const router = useRouter()
+  const toast = useToast()
+  const utils = trpc.useUtils()
+  const { mutate: duplicatePage, isPending: isDuplicatingPage } =
+    trpc.page.duplicatePage.useMutation({
+      onSuccess: async ({ pageId }) => {
+        await utils.resource.listWithoutRoot.invalidate()
+        toast({
+          title: "Page duplicated",
+          status: "success",
+          ...BRIEF_TOAST_SETTINGS,
+        })
+        void router.push(`/sites/${siteId}/pages/${pageId}`)
+      },
+      onError: (error) => {
+        toast({
+          title: "Could not duplicate page",
+          description: error.message,
+          status: "error",
+          ...BRIEF_TOAST_SETTINGS,
+        })
+      },
+    })
   const setMoveResource = useSetAtom(moveResourceAtom)
   const handleMoveResourceClick = () =>
     setMoveResource({ id: resourceId, title, permalink, parentId, type })
@@ -69,6 +98,24 @@ export const ResourceTableMenu = ({
               >
                 Edit settings
               </MenuItem>
+              {!isSearchPage && (
+                <Can do="create" on={{ parentId }}>
+                  <MenuItem
+                    as="button"
+                    isDisabled={isDuplicatingPage}
+                    onClick={() =>
+                      duplicatePage({
+                        siteId,
+                        pageId: Number(resourceId),
+                      })
+                    }
+                    icon={<BiCopy fontSize="1rem" />}
+                    aria-label={`Duplicate page ${title}`}
+                  >
+                    Duplicate page
+                  </MenuItem>
+                </Can>
+              )}
             </>
           )}
           {type === ResourceType.Folder && (
