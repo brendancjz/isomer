@@ -1,12 +1,6 @@
 import type { Notification } from "~/schemas/site"
 import { TRPCError } from "@trpc/server"
-import {
-  ResourceState,
-  ResourceType,
-  RoleType,
-} from "~/server/modules/database"
-import { ISOMER_ADMINS, ISOMER_MIGRATORS } from "~prisma/constants"
-import { addUsersToSite } from "~prisma/scripts/addUsersToSite"
+import { ResourceState, ResourceType } from "~/server/modules/database"
 
 import type {
   DB,
@@ -391,29 +385,6 @@ export const createSite = async ({ siteName, userId }: CreateSiteProps) => {
     await createSearchPage({ tx, siteId, userId })
     return siteId
   })
-
-  const creator = await db
-    .selectFrom("User")
-    .select(["email"])
-    .where("id", "=", userId)
-    .executeTakeFirst()
-
-  const isomerTeamUsers = [...ISOMER_ADMINS, ...ISOMER_MIGRATORS].map(
-    (email) => ({
-      email: `${email}@open.gov.sg`,
-      role: RoleType.Admin,
-    }),
-  )
-
-  // Always include the creator so they have access even if not on the Isomer team
-  // (e.g. in local development where the admin check is bypassed)
-  const usersToAdd =
-    creator &&
-    !isomerTeamUsers.some(({ email }) => email === creator.email)
-      ? [...isomerTeamUsers, { email: creator.email, role: RoleType.Admin }]
-      : isomerTeamUsers
-
-  await addUsersToSite({ siteId, users: usersToAdd })
 
   return { siteId, siteName }
 }
