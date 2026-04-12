@@ -5,6 +5,7 @@ import { TRPCError } from "@trpc/server"
 import { addDays, set, subDays } from "date-fns"
 import { omit, pick } from "lodash"
 import MockDate from "mockdate"
+import { vi } from "vitest"
 import { auth } from "tests/integration/helpers/auth"
 import { resetTables } from "tests/integration/helpers/db"
 import {
@@ -22,6 +23,7 @@ import {
   setupSite,
   setupUser,
 } from "tests/integration/helpers/seed"
+import * as s3Lib from "~/lib/s3"
 import { createCallerFactory } from "~/server/trpc"
 import {
   AuditLogEvent,
@@ -1902,6 +1904,156 @@ describe("page.router", async () => {
     // TODO: Implement tests when permissions are implemented
     it.skip("should throw 403 if user does not have write access to folder", async () => {})
     it.skip("should throw 403 if user does not have write access to root", async () => {})
+  })
+
+  describe("duplicatePage", () => {
+    let copySpy: ReturnType<typeof vi.spyOn>
+
+    beforeEach(() => {
+      copySpy = vi
+        .spyOn(s3Lib, "copyObjectInBucket")
+        .mockResolvedValue(undefined)
+    })
+
+    afterEach(() => {
+      copySpy.mockRestore()
+    })
+
+    it("should throw 401 if not logged in", async () => {
+      const unauthedSession = applySession()
+      const unauthedCaller = createCaller(createMockRequest(unauthedSession))
+
+      const result = unauthedCaller.duplicatePage({
+        siteId: 1,
+        pageId: 1,
+      })
+
+      await expect(result).rejects.toThrowError(
+        new TRPCError({ code: "UNAUTHORIZED" }),
+      )
+    })
+
+    it("should return 404 for non-Page resources", async () => {
+      const { collection, site } = await setupCollection()
+      const { page } = await setupPageResource({
+        siteId: site.id,
+        parentId: collection.id,
+        resourceType: ResourceType.CollectionPage,
+      })
+      await setupAdminPermissions({
+        userId: session.userId ?? undefined,
+        siteId: site.id,
+      })
+
+      const result = caller.duplicatePage({
+        siteId: site.id,
+        pageId: Number(page.id),
+      })
+
+      await expect(result).rejects.toThrowError(
+        new TRPCError({ code: "NOT_FOUND", message: "Page not found" }),
+      )
+    })
+
+    it("should duplicate a page as draft with a new permalink", async () => {
+      const { site, page } = await setupPageResource({
+        resourceType: ResourceType.Page,
+        permalink: "about-us",
+        title: "About us",
+      })
+      await setupAdminPermissions({
+        userId: session.userId ?? undefined,
+        siteId: site.id,
+      })
+
+      const result = await caller.duplicatePage({
+        siteId: site.id,
+        pageId: Number(page.id),
+      })
+
+      expect(copySpy).not.toHaveBeenCalled()
+
+      const duplicate = await db
+        .selectFrom("Resource")
+        .where("id", "=", result.pageId)
+        .selectAll()
+        .executeTakeFirstOrThrow()
+
+      expect(duplicate).toMatchObject({
+        title: "Copy of About us",
+        permalink: "about-us-copy",
+        type: ResourceType.Page,
+        state: ResourceState.Draft,
+        publishedVersionId: null,
+        parentId: page.parentId,
+      })
+      await assertAuditLogRows(1)
+    })
+
+    it("should copy assets and rewrite blob references", async () => {
+      const { site } = await setupSite()
+      await setupAdminPermissions({
+        userId: session.userId ?? undefined,
+        siteId: site.id,
+      })
+
+      const assetKey = `${site.id}/550e8400-e29b-41d4-a716-446655440000/photo.png`
+      const blob = await db
+        .insertInto("Blob")
+        .values({
+          content: jsonb({
+            page: { contentPageHeader: { summary: "Summary" } },
+            layout: "content",
+            content: [
+              {
+                type: "image",
+                src: `/${assetKey}`,
+                alt: "Alt",
+                size: "default",
+              },
+            ],
+            version: "0.1.0",
+          }),
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow()
+
+      const page = await db
+        .insertInto("Resource")
+        .values({
+          title: "With asset",
+          permalink: "with-asset",
+          siteId: site.id,
+          draftBlobId: blob.id,
+          type: ResourceType.Page,
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow()
+
+      await caller.duplicatePage({
+        siteId: site.id,
+        pageId: Number(page.id),
+      })
+
+      expect(copySpy).toHaveBeenCalledTimes(1)
+      const destKey = copySpy.mock.calls[0]?.[0].destinationKey as string
+      expect(destKey).toMatch(
+        new RegExp(`^${site.id}/[0-9a-f-]{36}/photo\\.png$`),
+      )
+      expect(copySpy.mock.calls[0]?.[0].sourceKey).toBe(assetKey)
+
+      const dupRow = await db
+        .selectFrom("Resource")
+        .innerJoin("Blob", "Resource.draftBlobId", "Blob.id")
+        .where("Resource.permalink", "=", "with-asset-copy")
+        .select(["Blob.content"])
+        .executeTakeFirstOrThrow()
+
+      const src = (dupRow.content as { content: { src: string }[] }).content[0]
+        ?.src
+      expect(src).toBe(`/${destKey}`)
+      expect(src).not.toBe(`/${assetKey}`)
+    })
   })
 
   describe("getRootPage", () => {
