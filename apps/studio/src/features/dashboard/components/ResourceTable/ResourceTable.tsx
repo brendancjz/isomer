@@ -20,7 +20,7 @@ type ResourceTableData = RouterOutput["resource"]["listWithoutRoot"][number]
 
 const columnsHelper = createColumnHelper<ResourceTableData>()
 
-const getColumns = ({ siteId }: ResourceTableProps) => [
+const getColumns = ({ siteId, resourceId: tableScopeResourceId }: ResourceTableProps) => [
   columnsHelper.accessor("title", {
     minSize: 300,
     header: () => <TableHeader>Title</TableHeader>,
@@ -40,6 +40,8 @@ const getColumns = ({ siteId }: ResourceTableProps) => [
     header: () => <TableHeader>Actions</TableHeader>,
     cell: ({ row }) => (
       <ResourceTableMenu
+        siteId={siteId}
+        tableScopeResourceId={tableScopeResourceId}
         parentId={row.original.parentId}
         title={row.original.title}
         resourceId={row.original.id}
