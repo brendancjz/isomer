@@ -43,6 +43,9 @@ export const basePageSchema = z.object({
   siteId: z.number().min(1),
 })
 
+/** Duplicate an existing page (draft copy, new asset keys). Same shape as read/update page scope. */
+export const duplicatePageSchema = basePageSchema
+
 export const reorderBlobSchema = z.object({
   pageId: z.number().min(1),
   from: z.number().min(0),
