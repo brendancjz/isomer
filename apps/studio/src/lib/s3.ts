@@ -3,6 +3,8 @@ import type {
   PutObjectTaggingCommandInput,
 } from "@aws-sdk/client-s3"
 import {
+  CopyObjectCommand,
+  DeleteObjectTaggingCommand,
   GetObjectTaggingCommand,
   PutObjectCommand,
   PutObjectTaggingCommand,
@@ -39,6 +41,37 @@ export const generateSignedPutUrl = async ({
       // Sign these headers so S3 rejects PUTs with different values (prevents type-confusion XSS)
       signableHeaders: new Set(["content-type", "content-disposition"]),
     },
+  )
+}
+
+const encodeCopySourceKey = (key: string): string =>
+  key
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/")
+
+export const copyObjectInBucket = async ({
+  sourceKey,
+  destinationKey,
+  Bucket,
+}: {
+  sourceKey: string
+  destinationKey: string
+  Bucket: string
+}) => {
+  await storage.send(
+    new CopyObjectCommand({
+      Bucket,
+      Key: destinationKey,
+      CopySource: `${Bucket}/${encodeCopySourceKey(sourceKey)}`,
+      MetadataDirective: "COPY",
+    }),
+  )
+  await storage.send(
+    new DeleteObjectTaggingCommand({
+      Bucket,
+      Key: destinationKey,
+    }),
   )
 }
 
