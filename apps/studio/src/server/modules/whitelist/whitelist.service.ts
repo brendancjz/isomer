@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server"
+import { env } from "~/env.mjs"
 import { isValidEmail } from "~/utils/email"
 
 import type { DB, Transaction } from "../database"
@@ -86,6 +87,10 @@ export const whitelistEmails = async ({
 }
 
 export const isEmailWhitelisted = async (email: string) => {
+  if (env.NODE_ENV === "development") {
+    return true
+  }
+
   const lowercaseEmail = email.toLowerCase()
 
   // Extra guard even if Zod validation has already checked

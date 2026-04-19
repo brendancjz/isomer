@@ -303,6 +303,9 @@ export const isActiveIsomerAdmin = async (
   userId: string,
   roles?: IsomerAdminRole[],
 ): Promise<boolean> => {
+  if (env.NODE_ENV === "development") {
+    return true
+  }
   const now = new Date()
   let query = db
     .selectFrom("IsomerAdmin")
